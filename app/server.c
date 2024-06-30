@@ -9,14 +9,15 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <zlib.h>
-#define BUFFER_SIZE 1024
 
-char directory[BUFFER_SIZE] = "."; // current directory
+#define BUFFER_SIZE 1024 // Define buffer size
 
+char directory[BUFFER_SIZE] = "."; // Current directory
+
+// Function to deflate (compress) data using gzip
 static char* gzip_deflate(char* data, size_t data_len, size_t* gzip_len) {
     z_stream stream = { 0 };
-    deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 0x1F, 8,
-        Z_DEFAULT_STRATEGY);
+    deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 0x1F, 8, Z_DEFAULT_STRATEGY);
     size_t max_len = deflateBound(&stream, data_len);
     char* gzip_data = malloc(max_len);
     memset(gzip_data, 0, max_len);
@@ -30,23 +31,29 @@ static char* gzip_deflate(char* data, size_t data_len, size_t* gzip_len) {
     return gzip_data;
 }
 
+// Function to handle client requests
 void* handle_request(void* socket_desc) {
     int fd = *(int*)socket_desc;
     free(socket_desc);
     char buffer[BUFFER_SIZE] = { 0 };
-    // recieve msg
+
+    // Receive message from the client
     int msg_Read = read(fd, buffer, BUFFER_SIZE);
     if (msg_Read < 0) {
         printf("read failed");
     }
     printf("Received HTTP request:\n%s\n", buffer);
-    // Extract URL
+
+    // Extract HTTP method, URL, and protocol
     char method[16], url[256], protocol[16];
     sscanf(buffer, "%s %s %s", method, url, protocol);
     printf("URL: %s\n", url);
     char response[BUFFER_SIZE];
+
     if (strcmp(method, "GET") == 0) {
+        // Handle GET requests
         if (strncmp(url, "/files/", 7) == 0) {
+            // Serve file from the directory
             char* file_requested = url + 7;
             char file_path[BUFFER_SIZE];
             snprintf(file_path, sizeof(file_path), "%s%s", directory, file_requested);
@@ -57,8 +64,7 @@ void* handle_request(void* socket_desc) {
                 file_buffer[bytes_read] = '\0';
                 fclose(file);
                 snprintf(response, sizeof(response),
-                    "HTTP/1.1 200 OK\r\nContent-Type: "
-                    "application/octet-stream\r\nContent-Length: %d\r\n\r\n%s",
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s",
                     strlen(file_buffer), file_buffer);
             }
             else {
@@ -67,77 +73,73 @@ void* handle_request(void* socket_desc) {
             }
         }
         else if (strcmp(url, "/") == 0) {
+            // Serve a simple OK response
             snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\n\r\n\r\n");
         }
         else if (strncmp(url, "/echo/", 6) == 0) {
+            // Echo the message back to the client
             char* echo_msg = url + 6;
             char* encoding_header = strstr(buffer, "Accept-Encoding: ");
             if (encoding_header != NULL) {
                 char* encoding_crlf = strstr(encoding_header, "\r\n");
                 char encodings[BUFFER_SIZE];
-                strncpy(encodings, encoding_header + 17,
-                    encoding_crlf - (encoding_header + 17));
+                strncpy(encodings, encoding_header + 17, encoding_crlf - (encoding_header + 17));
                 encodings[encoding_crlf - (encoding_header + 17)] = '\0';
                 if (strstr(encodings, "gzip") != NULL) {
+                    // Compress the echo message using gzip
                     char* compressed_buffer;
                     long unsigned int compressed_len;
-                    compressed_buffer =
-                        gzip_deflate(echo_msg, strlen(echo_msg), &compressed_len);
-
+                    compressed_buffer = gzip_deflate(echo_msg, strlen(echo_msg), &compressed_len);
                     snprintf(response, sizeof(response),
-                        "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Type: "
-                        "text/plain\r\nContent-Length: %ld\r\n\r\n",
+                        "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n",
                         compressed_len);
-                    send(fd, response, strlen(response),
-                        0); // write() gives gzip:invalid header error
-                    send(fd, compressed_buffer, compressed_len, 0);
+                    send(fd, response, strlen(response), 0); // Send headers
+                    send(fd, compressed_buffer, compressed_len, 0); // Send compressed data
                     return NULL;
                 }
                 else {
                     snprintf(response, sizeof(response),
-                        "HTTP/1.1 200 OK\r\nContent-Type: "
-                        "text/plain\r\nContent-Length: %d\r\n\r\n%s",
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
                         strlen(echo_msg), echo_msg);
                 }
             }
             else {
                 snprintf(response, sizeof(response),
-                    "HTTP/1.1 200 OK\r\nContent-Type: "
-                    "text/plain\r\nContent-Length: %d\r\n\r\n%s",
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
                     strlen(echo_msg), echo_msg);
             }
         }
         else if (strncmp(url, "/user-agent", 11) == 0) {
+            // Extract and return the User-Agent header
             char* user_agent = strstr(buffer, "User-Agent:");
             if (user_agent) {
                 user_agent += 12;
                 char* eol = strstr(user_agent, "\r\n");
-                if (eol)
-                    *eol = '\0';
+                if (eol) *eol = '\0';
             }
             else {
                 user_agent = "User-Agent not found";
             }
             printf("user-agent: %s", user_agent);
             snprintf(response, sizeof(response),
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: "
-                "%d\r\n\r\n%s",
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
                 strlen(user_agent), user_agent);
         }
         else {
+            // Handle unknown URLs
             snprintf(response, sizeof(response),
                 "HTTP/1.1 404 Not Found\r\n\r\n\r\n");
         }
     }
     else if (strcmp(method, "POST") == 0) {
+        // Handle POST requests
         char* file_requested = url + 7;
         char file_path[BUFFER_SIZE];
         snprintf(file_path, sizeof(file_path), "%s%s", directory, file_requested);
         char* body = strstr(buffer, "\r\n\r\n");
         if (body == NULL) {
             snprintf(response, sizeof(response),
-                "HTTP/1.1 400 Bad Request\r\nContent-Type: "
-                "text/plain\r\n\r\n400 Bad Request");
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\n\r\n400 Bad Request");
         }
         else {
             body += 4;
@@ -153,10 +155,12 @@ void* handle_request(void* socket_desc) {
         }
     }
     else {
+        // Handle unsupported HTTP methods
         snprintf(response, sizeof(response),
-            "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: "
-            "text/plain\r\n\r\n405 Method Not Allowed");
+            "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\n\r\n405 Method Not Allowed");
     }
+
+    // Send the response to the client
     write(fd, response, sizeof(response) - 1);
     close(fd);
     return NULL;
@@ -166,6 +170,8 @@ int main(int argc, char* argv[]) {
     setbuf(stdout, NULL);
     setbuf(stderr, NULL);
     printf("Logs from your program will appear here!\n");
+
+    // Parse command-line arguments for directory option
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--directory") == 0) {
             strncpy(directory, argv[i + 1], sizeof(directory) - 1);
@@ -173,21 +179,25 @@ int main(int argc, char* argv[]) {
         }
     }
     printf("directory: %s\n", directory);
+
     int server_fd, client_addr_len, * fd;
     struct sockaddr_in client_addr;
+
+    // Create a socket
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) {
         printf("Socket creation failed: %s...\n", strerror(errno));
         return 1;
     }
-    // Since the tester restarts your program quite often, setting SO_REUSEADDR
-    // ensures that we don't run into 'Address already in use' errors
+
+    // Set socket options to reuse address
     int reuse = 1;
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) <
-        0) {
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
         printf("SO_REUSEADDR failed: %s \n", strerror(errno));
         return 1;
     }
+
+    // Bind the socket to an address and port
     struct sockaddr_in serv_addr = {
         .sin_family = AF_INET,
         .sin_port = htons(4221),
@@ -197,17 +207,22 @@ int main(int argc, char* argv[]) {
         printf("Bind failed: %s \n", strerror(errno));
         return 1;
     }
+
+    // Listen for incoming connections
     int connection_backlog = 5;
     if (listen(server_fd, connection_backlog) != 0) {
         printf("Listen failed: %s \n", strerror(errno));
         return 1;
     }
+
     while (1) {
         printf("Waiting for a client to connect...\n");
         client_addr_len = sizeof(client_addr);
         fd = malloc(sizeof(int));
         *fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_addr_len);
         printf("Client connected\n");
+
+        // Create a new thread to handle the client request
         pthread_t thread_id;
         if (pthread_create(&thread_id, NULL, handle_request, (void*)fd) < 0) {
             printf("Could not create thread");
@@ -215,6 +230,8 @@ int main(int argc, char* argv[]) {
         }
         pthread_detach(thread_id);
     }
+
+    // Close the server socket
     close(server_fd);
     return 0;
 }
